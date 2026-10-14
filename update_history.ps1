@@ -1,6 +1,6 @@
 <#
   Weekly fantasy rank history for the Angle projections site.
-  Runs in GitHub Actions every Monday (see .github/workflows/weekly-ranks.yml), or by hand.
+  Runs in GitHub Actions every morning after the previous night's games are final (see .github/workflows/weekly-ranks.yml), or by hand.
 
   1. Pulls completed NBA games from ESPN's public scoreboard/box-score feeds into data/games.csv
      (only new games are fetched; the CSV is the running game log).
@@ -9,7 +9,8 @@
        - 9-cat: sum of z-scores (FG%/FT% weighted by attempts), pool = top 200
        - Yahoo Points: PTS 1, REB 1.2, AST 1.5, STL 3, BLK 3, TO -1
        - ESPN Points: PTS 1, 3PM 1, FGM 2, FGA -1, FTM 1, FTA -1, REB 1, AST 2, STL 4, BLK 4, TO -2
-  3. Writes history.json, keyed by ESPN athlete id, which index.html reads for the player-card Trend tab.
+  3. Writes history.json, keyed by ESPN athlete id: weekly ranks and weekly totals for the Trend graphs (completed weeks only),
+     plus "latest" = season-to-date totals through last night, which the page uses for the daily Real / Blend ranks.
 #>
 param(
   [string]$Root = (Split-Path $PSScriptRoot -Parent),
@@ -121,6 +122,14 @@ for ($w = 0; $w -lt $weeks.Count; $w++) {
   }
 }
 
+# ---------- 2b. season-to-date totals through last night (daily Real / Blend ranks) ----------
+$latest = @{}; $latInfo = @{}
+foreach ($r in $sorted) {
+  if (-not $latest.ContainsKey($r.id)) { $latest[$r.id] = New-Object 'double[]' 13 }
+  $acc = $latest[$r.id]; $acc[0]++; for ($j = 0; $j -lt $FIELDS.Count; $j++) { $acc[$j + 1] += [double]$r.($FIELDS[$j]) }
+  $latInfo[$r.id] = @{ n = $r.name; t = $r.team; pos = $(if ($r.pos) { $r.pos } elseif ($latInfo[$r.id]) { $latInfo[$r.id].pos } else { $null }) }
+}
+
 # ---------- 3. history.json ----------
 $out = [ordered]@{ updated = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', $inv); seasonStart = $SeasonStart; basis = 'season-to-date per-game value'; weeks = @($weeks); ranks = [ordered]@{} }
 foreach ($id in ($ranks.Keys | Sort-Object)) { $out.ranks[$id] = [ordered]@{ n = $names[$id]; cat = @($ranks[$id].cat); yahoo = @($ranks[$id].yahoo); espn = @($ranks[$id].espn) } }
@@ -128,9 +137,12 @@ $out.stats = [ordered]@{}
 foreach ($id in ($wk.Keys | Sort-Object)) {
   $out.stats[$id] = [ordered]@{ n = $names[$id]; t = $teamOf[$id]; pos = $posOf[$id]; w = @(foreach ($a in $wk[$id]) { if ($null -eq $a) { 0 } else { ,@($a | ForEach-Object { [math]::Round($_, 1) }) } }) }
 }
+$lp = [ordered]@{}
+foreach ($id in ($latest.Keys | Sort-Object)) { $lp[$id] = [ordered]@{ n = $latInfo[$id].n; t = $latInfo[$id].t; pos = $latInfo[$id].pos; s = @($latest[$id] | ForEach-Object { [math]::Round($_, 1) }) } }
+$out.latest = [ordered]@{ through = $last.ToString('yyyy-MM-dd', $inv); games = $haveGame.Count; p = $lp }
 $json = $out | ConvertTo-Json -Depth 6 -Compress
 [IO.File]::WriteAllText((Join-Path $Root 'history.json'), $json, (New-Object Text.UTF8Encoding $false))
-"history: $($weeks.Count) completed weeks, $($out.ranks.Count) players ranked"
+"history: $($weeks.Count) completed weeks, $($out.ranks.Count) players ranked; season-to-date through $($out.latest.through) for $($lp.Count) players"
 
 # ---------- 4. schedule.json (full regular season; refreshed weekly so NBA Cup knockout games and reschedules appear) ----------
 try {
