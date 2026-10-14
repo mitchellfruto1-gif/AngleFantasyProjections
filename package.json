@@ -1,0 +1,28 @@
+{
+  "name": "angle-fantasy-bb-projections",
+  "version": "1.0.0",
+  "description": "Angle Fantasy Basketball 2026-27 rankings: 9-category and points-league projections",
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mitchellfruto1-gif/AngleFantasyProjections.git"
+  },
+  "keywords": [
+    "fantasy",
+    "basketball",
+    "projections",
+    "analytics"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mitchellfruto1-gif/AngleFantasyProjections/issues"
+  },
+  "homepage": "https://github.com/mitchellfruto1-gif/AngleFantasyProjections#readme",
+  "dependencies": {
+    "@vercel/analytics": "^2.0.1"
+  }
+}
