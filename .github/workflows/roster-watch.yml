@@ -1,0 +1,53 @@
+name: Roster and injury watch
+
+# Twice a day: 8:30 AM Pacific (15:30 UTC) and 6:30 PM Pacific (01:30 UTC), so morning waivers and
+# pregame injury news are both caught. Compares ESPN rosters and the injury report with the last run,
+# saves data/rosters.json, data/injuries.json (the site's injury badges) and data/changes.json,
+# and opens a GitHub issue listing the changes when there are any (GitHub emails the repo owner).
+on:
+  schedule:
+    - cron: '30 15 * * *'
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: weekly-ranks   # shared with the daily ranks job so the two never push at the same time
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare ESPN rosters and injury report with the last run
+        shell: pwsh
+        run: ./scripts/roster_watch.ps1 -Report "$env:RUNNER_TEMP/report.md"
+
+      - name: Commit updated roster and injury files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
+          git add data/rosters.json data/injuries.json data/changes.json
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "Roster watch: $(date -u +%Y-%m-%d)"
+            git pull --rebase
+            git push
+          fi
+
+      - name: Open an issue listing the changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f "$RUNNER_TEMP/report.md" ]; then
+            gh issue create --title "Roster and injury changes: $(TZ=America/New_York date +%Y-%m-%d) ($(TZ=America/Los_Angeles date +%-I%p) PT check)" --body-file "$RUNNER_TEMP/report.md"
+          else
+            echo "Nothing changed since the last check."
+          fi
