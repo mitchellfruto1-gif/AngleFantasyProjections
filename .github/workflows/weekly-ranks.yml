@@ -30,10 +30,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
-          git add history.json schedule.json data/games.csv data/gamelogs
+          git add history.json schedule.json data/games.csv data/gamelogs data/market.json
           if git diff --cached --quiet; then
             echo "No changes today."
           else
             git commit -m "Daily ranks: $(date -u +%Y-%m-%d)"
+            git pull --rebase
             git push
           fi
