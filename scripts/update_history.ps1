@@ -10,6 +10,7 @@
        - Yahoo Points: PTS 1, REB 1.2, AST 1.5, STL 3, BLK 3, TO -1
        - ESPN Points: PTS 1, 3PM 1, FGM 2, FGA -1, FTM 1, FTA -1, REB 1, AST 2, STL 4, BLK 4, TO -2
   3. Writes data/gamelogs/{espnId}.json: every regular-season game for the player card's Games Log tab.
+  3b. Writes data/market.json: every game line in compact form, for the site's Market tab.
   4. Writes history.json, keyed by ESPN athlete id: weekly ranks and weekly totals for the Trend graphs (completed weeks only),
      plus "latest" = season-to-date totals through last night, which the page uses for the daily Real / Blend ranks.
 #>
@@ -150,6 +151,23 @@ foreach ($grp in ($sorted | Group-Object id)) {
   [IO.File]::WriteAllText((Join-Path $glDir "$($grp.Name).json"), ($doc | ConvertTo-Json -Depth 5 -Compress), (New-Object Text.UTF8Encoding $false))
 }
 "game logs: $(@($sorted | Group-Object id).Count) players"
+
+# ---------- 3b. market.json (the site's Market tab: every game line in compact form; the page prices players from these) ----------
+# { updated, d: [game dates], p: { espnId: { n, t, g: [[date index, min, pts, fgm, fga, tpm, ftm, fta, reb, ast, stl, blk, to], ...] } } }
+$mDates = @($sorted | ForEach-Object { $_.date } | Sort-Object -Unique)
+$mIdx = @{}; for ($i = 0; $i -lt $mDates.Count; $i++) { $mIdx[$mDates[$i]] = $i }
+$msb = New-Object Text.StringBuilder
+[void]$msb.Append('{"updated":"' + [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', $inv) + '","d":[' + (($mDates | ForEach-Object { '"' + $_ + '"' }) -join ',') + '],"p":{')
+$mFirst = $true
+foreach ($grp in ($sorted | Group-Object id)) {
+  $ord = @($grp.Group | Sort-Object date, game); $lastG = $ord[-1]
+  $gl = foreach ($r in $ord) { '[' + ((@($mIdx[$r.date]) + @(foreach ($k in $FIELDS) { [int][math]::Round([double]$r.$k) })) -join ',') + ']' }
+  if (-not $mFirst) { [void]$msb.Append(',') }; $mFirst = $false
+  [void]$msb.Append('"' + $grp.Name + '":{"n":' + ($lastG.name | ConvertTo-Json) + ',"t":"' + $lastG.team + '","g":[' + ($gl -join ',') + ']}')
+}
+[void]$msb.Append('}}')
+[IO.File]::WriteAllText((Join-Path $dataDir 'market.json'), $msb.ToString(), (New-Object Text.UTF8Encoding $false))
+"market: $(@($sorted | Group-Object id).Count) players over $($mDates.Count) game days"
 
 # ---------- 4. history.json ----------
 $out = [ordered]@{ updated = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', $inv); seasonStart = $SeasonStart; basis = 'season-to-date per-game value'; weeks = @($weeks); ranks = [ordered]@{} }
