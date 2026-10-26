@@ -1,0 +1,64 @@
+name: Promo emails
+
+# Emails ready-to-post promo images with suggested text.
+#   Daily (every morning): top 10 performers of the night, 9-cat and points.
+#   Weekly (Monday morning): top 25 of the week, 9-cat and points, plus the Angle Market's gainers and losers.
+# Runs after the 11:00 UTC daily data update. The recipient, Gmail login and access code are repository
+# secrets, so none of them appear in this public file or its logs.
+on:
+  schedule:
+    - cron: "30 13 * * *"   # every day, about 6:30 AM Pacific
+    - cron: "45 13 * * 1"   # Mondays, about 6:45 AM Pacific
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which email to send"
+        type: choice
+        options: [daily, weekly]
+        default: daily
+
+permissions:
+  contents: read
+
+jobs:
+  promo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick daily or weekly
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then mode="${{ inputs.mode }}"
+          elif [ "${{ github.event.schedule }}" = "45 13 * * 1" ]; then mode="weekly"
+          else mode="daily"; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Serve the site locally
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 >/dev/null 2>&1 &
+          sleep 2
+
+      - name: Make the promo images
+        id: shots
+        shell: pwsh
+        env:
+          ANGLE_CODE: ${{ secrets.ANGLE_CODE }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: ./scripts/promo_shots.ps1 -Mode ${{ steps.mode.outputs.mode }} -Site "$env:SITE_URL"
+
+      - name: Email them
+        if: steps.shots.outputs.send == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Angle promo bot <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_TO }}
+          subject: ${{ steps.shots.outputs.subject }}
+          html_body: file://promo-out/email.html
+          attachments: promo-out/*.png
