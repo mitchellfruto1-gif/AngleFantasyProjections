@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/patreon/:path*", "destination": "https://anglefantasyprojections.mitchell-fruto1.workers.dev/api/patreon/:path*" }
+  ]
+}

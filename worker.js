@@ -32,7 +32,9 @@ export default {
   }
 };
 
-const redirectUri = url => url.origin + "/api/patreon/callback";
+// always the real domain, even when the request was forwarded from the old Vercel host or came in on workers.dev
+const SITE = "https://anglefantasybbprojections.com";
+const redirectUri = () => SITE + "/api/patreon/callback";
 
 function login(url) {
   const state = hex(crypto.getRandomValues(new Uint8Array(16)));
@@ -100,7 +102,7 @@ function status(env) {
 
 /* ---------- helpers ---------- */
 function back(url, to, setCookies = []) {
-  const h = new Headers({ Location: new URL(to, url.origin).href, "Cache-Control": "no-store" });
+  const h = new Headers({ Location: new URL(to, SITE).href, "Cache-Control": "no-store" });
   setCookies.forEach(c => h.append("Set-Cookie", c));
   return new Response(null, { status: 302, headers: h });
 }
