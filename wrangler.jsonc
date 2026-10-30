@@ -1,0 +1,9 @@
+// Cloudflare Workers settings: serve this repo as the website (static files, no build step).
+// The Patreon login will add a small server script here later.
+{
+  "name": "anglefantasyprojections",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./"
+  }
+}
