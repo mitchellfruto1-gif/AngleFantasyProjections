@@ -7,3 +7,4 @@ wrangler.jsonc
 node_modules
 promo-out
 worker.js
+vercel.json
