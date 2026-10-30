@@ -1,8 +1,12 @@
 name: Promo emails
 
 # Emails ready-to-post promo images with suggested text.
-#   Daily (every morning): top 10 performers of the night, 9-cat and points.
-#   Weekly (Monday morning): top 25 of the week, 9-cat and points, plus the Angle Market's gainers and losers.
+#   Daily (every morning): top 10 performers of the night (9-cat and points), the Angle Market's 5 buy lows and
+#     5 sell highs with each player's Market card PNG, and on Wed (punt impact) / Thu (what didn't change) that day's Monday-changelog post.
+#   Weekly (Monday morning): saves the encrypted Monday snapshot (data/monday/), then the 4-post ANGLE MONDAY UPDATE
+#     thread with its header / risers / fallers images, plus the top 25 of the week and the Market movers.
+#   Snapshot (Run workflow only): saves a snapshot and sends nothing; run it once to start the Monday-to-Monday diff.
+# Nothing is posted to X: everything arrives by email for review.
 # Runs after the 11:00 UTC daily data update. The recipient, Gmail login and access code are repository
 # secrets, so none of them appear in this public file or its logs.
 on:
@@ -14,11 +18,11 @@ on:
       mode:
         description: "Which email to send"
         type: choice
-        options: [daily, weekly]
+        options: [daily, weekly, snapshot]
         default: daily
 
 permissions:
-  contents: read
+  contents: write   # commits the encrypted Monday snapshot
 
 jobs:
   promo:
@@ -46,7 +50,17 @@ jobs:
         env:
           ANGLE_CODE: ${{ secrets.ANGLE_CODE }}
           SITE_URL: ${{ vars.SITE_URL }}
+          MONDAY_SAFE: ${{ vars.MONDAY_SAFE }}   # "true" = posts name only players in the free top 25 (default: full ranks)
         run: ./scripts/promo_shots.ps1 -Mode ${{ steps.mode.outputs.mode }} -Site "$env:SITE_URL"
+
+      - name: Save the Monday snapshot
+        if: steps.mode.outputs.mode != 'daily'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
+          git add data/monday
+          if git diff --cached --quiet; then echo "No new snapshot."; else
+            git commit -m "Monday snapshot: $(date -u +%Y-%m-%d)"; git pull --rebase; git push; fi
 
       - name: Email them
         if: steps.shots.outputs.send == 'true'
