@@ -6,7 +6,10 @@
      SESSION_SECRET         secret   any long random string; signs the 7-day login cookie
      ACCESS_CODE            secret   the site's access code, handed only to approved members
      ALLOWLIST              text     Patreon user IDs that always get in (owner, partners, comps), comma separated
-   Who gets in: anyone on ALLOWLIST, or an active patron of this campaign entitled to MIN_CENTS or more ($3 All-Access). */
+   Who gets in: anyone on ALLOWLIST, or an active patron of this campaign entitled to MIN_CENTS or more ($3 All-Access).
+   Saved settings: the D1 database bound as DB (wrangler.jsonc) keeps one row per member (their Patreon ID) with the
+   settings the page syncs (saved leagues, custom scoring, watchlist, Matchup rosters). /api/patreon/session hands them
+   back with the login; /api/patreon/prefs (PUT) saves them. */
 const CLIENT_ID = "il8brDLuyB0fmm67C1J1Y_sM59spTpUcsmVSi7GXjA5c0XX8hic9CMEE5NgnKyvZ";
 const MIN_CENTS = 300;
 const DAYS = 7;
@@ -23,6 +26,7 @@ export default {
         case "/api/patreon/session": return await session(req, env);
         case "/api/patreon/logout": return back(url, "/", [cookie(SESSION, "", 0)]);
         case "/api/patreon/status": return status(env);
+        case "/api/patreon/prefs": return await prefs(req, env);
       }
       return new Response("Not found", { status: 404 });
     } catch (e) {
@@ -89,18 +93,58 @@ function decide(uid, me, env) {
 
 async function session(req, env) {
   const s = await verify(env, cookies(req)[SESSION]);
-  const body = s ? { ok: true, name: s.n, kind: s.k, code: env.ACCESS_CODE } : { ok: false };
-  return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  if (!s) return json({ ok: false });
+  const body = { ok: true, uid: s.u, name: s.n, kind: s.k, code: env.ACCESS_CODE };
+  // saved settings ride along with the login (null = none saved yet); left out if the database isn't set up or fails,
+  // so a storage problem never blocks a login
+  if (env.DB) try { body.prefs = await prefsGet(env, s.u); } catch (e) { console.log("prefs read failed", e && e.message); }
+  return json(body);
+}
+
+/* ---------- saved settings (D1) ---------- */
+const PREFS_MAX = 65536;   // bytes per member; leagues, scoring, watchlist and rosters are a few KB
+async function dbReady(env) {
+  if (!dbReady.done) { await env.DB.prepare("CREATE TABLE IF NOT EXISTS prefs (uid TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)").run(); dbReady.done = true; }
+}
+async function prefsGet(env, uid) {
+  await dbReady(env);
+  const r = await env.DB.prepare("SELECT data, updated FROM prefs WHERE uid = ?").bind(uid).first();
+  return r ? { data: JSON.parse(r.data), updated: r.updated } : null;
+}
+async function prefs(req, env) {
+  const s = await verify(env, cookies(req)[SESSION]);
+  if (!s) return json({ ok: false, error: "not logged in" }, 401);
+  if (!env.DB) return json({ ok: false, error: "saved settings aren't set up" }, 503);
+  try {
+    if (req.method === "GET") return json({ ok: true, prefs: await prefsGet(env, s.u) });
+    if (req.method !== "PUT") return json({ ok: false, error: "use GET or PUT" }, 405);
+    // JSON only: a cross-site form can't send it, and a cross-site fetch can't without CORS, which this never grants
+    if (!/^application\/json/i.test(req.headers.get("Content-Type") || "")) return json({ ok: false, error: "send JSON" }, 415);
+    const text = await req.text();
+    if (text.length > PREFS_MAX) return json({ ok: false, error: "too big" }, 413);
+    let b; try { b = JSON.parse(text); } catch (e) { return json({ ok: false, error: "bad JSON" }, 400); }
+    if (!b || !b.data || typeof b.data !== "object" || Array.isArray(b.data) || !Number.isFinite(b.updated)) return json({ ok: false, error: "expected { data, updated }" }, 400);
+    const data = {}; for (const k in b.data) if (/^angle-[a-z-]{1,40}$/.test(k) && typeof b.data[k] === "string") data[k] = b.data[k];
+    const updated = Math.min(Math.floor(b.updated), Date.now() + 60000);
+    await dbReady(env);
+    // newest change wins: an older save (a device that was offline) never overwrites a newer one
+    await env.DB.prepare("INSERT INTO prefs (uid, data, updated) VALUES (?, ?, ?) ON CONFLICT(uid) DO UPDATE SET data = excluded.data, updated = excluded.updated WHERE excluded.updated >= prefs.updated")
+      .bind(s.u, JSON.stringify(data), updated).run();
+    return json({ ok: true, saved: updated });
+  } catch (e) {
+    console.log("prefs error", e && e.stack || e);
+    return json({ ok: false, error: "storage error" }, 500);
+  }
 }
 
 // setup check: says which settings the live site can see (never their values)
 function status(env) {
-  const body = { PATREON_CLIENT_SECRET: !!env.PATREON_CLIENT_SECRET, SESSION_SECRET: !!env.SESSION_SECRET, ACCESS_CODE: !!env.ACCESS_CODE,
-    ALLOWLIST_ids: String(env.ALLOWLIST || "").split(/[\s,]+/).filter(Boolean).length };
-  return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  return json({ PATREON_CLIENT_SECRET: !!env.PATREON_CLIENT_SECRET, SESSION_SECRET: !!env.SESSION_SECRET, ACCESS_CODE: !!env.ACCESS_CODE,
+    ALLOWLIST_ids: String(env.ALLOWLIST || "").split(/[\s,]+/).filter(Boolean).length, DB: !!env.DB });
 }
 
 /* ---------- helpers ---------- */
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 function back(url, to, setCookies = []) {
   const h = new Headers({ Location: new URL(to, SITE).href, "Cache-Control": "no-store" });
   setCookies.forEach(c => h.append("Set-Cookie", c));

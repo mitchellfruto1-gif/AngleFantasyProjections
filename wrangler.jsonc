@@ -1,5 +1,5 @@
 // Cloudflare Workers settings: serve this repo as the website (static files, no build step).
-// worker.js only runs for paths that aren't files in the repo, i.e. the Patreon login at /api/patreon/*.
+// worker.js only runs for paths that aren't files in the repo, i.e. the Patreon login and saved settings at /api/patreon/*.
 {
   "name": "anglefantasyprojections",
   "compatibility_date": "2025-09-01",
@@ -8,6 +8,10 @@
     "directory": "./",
     "binding": "ASSETS"
   },
+  // members' saved settings (leagues, custom scoring, watchlist, Matchup rosters), one row per Patreon ID
+  "d1_databases": [
+    { "binding": "DB", "database_name": "angle-prefs", "database_id": "8bbd63b0-7262-4318-a238-83db493e5f8e" }
+  ],
   "observability": { "enabled": true },
   "keep_vars": true
 }
