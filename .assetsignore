@@ -1,0 +1,8 @@
+# files in the repo that are NOT part of the website (Cloudflare skips these when publishing)
+.git
+.github
+scripts
+wrangler.jsonc
+.assetsignore
+node_modules
+promo-out
