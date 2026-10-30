@@ -22,6 +22,7 @@ export default {
         case "/api/patreon/callback": return await callback(url, req, env);
         case "/api/patreon/session": return await session(req, env);
         case "/api/patreon/logout": return back(url, "/", [cookie(SESSION, "", 0)]);
+        case "/api/patreon/status": return status(env);
       }
       return new Response("Not found", { status: 404 });
     } catch (e) {
@@ -87,6 +88,13 @@ function decide(uid, me, env) {
 async function session(req, env) {
   const s = await verify(env, cookies(req)[SESSION]);
   const body = s ? { ok: true, name: s.n, kind: s.k, code: env.ACCESS_CODE } : { ok: false };
+  return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
+}
+
+// setup check: says which settings the live site can see (never their values)
+function status(env) {
+  const body = { PATREON_CLIENT_SECRET: !!env.PATREON_CLIENT_SECRET, SESSION_SECRET: !!env.SESSION_SECRET, ACCESS_CODE: !!env.ACCESS_CODE,
+    ALLOWLIST_ids: String(env.ALLOWLIST || "").split(/[\s,]+/).filter(Boolean).length };
   return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 }
 
