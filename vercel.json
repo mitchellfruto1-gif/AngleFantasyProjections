@@ -1,6 +1,0 @@
-{
-  "rewrites": [
-    { "source": "/api/patreon/:path*", "destination": "https://anglefantasyprojections.mitchell-fruto1.workers.dev/api/patreon/:path*" },
-    { "source": "/:tab(points|market|matchup|box-scores|schedule|my-league)", "destination": "https://anglefantasyprojections.mitchell-fruto1.workers.dev/:tab" }
-  ]
-}
