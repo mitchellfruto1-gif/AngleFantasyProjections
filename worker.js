@@ -1,5 +1,6 @@
 /* Patreon login for anglefantasybbprojections.com.
-   Everything that is a file in the repo is served as-is by Cloudflare; only /api/patreon/* reaches this script.
+   Everything that is a file in the repo is served as-is by Cloudflare; only paths that aren't files reach this script:
+   /api/patreon/* (below) and the tab addresses (/points, /market, ...: TAB_PAGES).
 
    Settings (Cloudflare -> Workers -> anglefantasyprojections -> Settings -> Variables and Secrets):
      PATREON_CLIENT_SECRET  secret   from the Patreon client page (never in this repo)
@@ -15,9 +16,44 @@ const MIN_CENTS = 300;
 const DAYS = 7;
 const SESSION = "angle_pt", STATE = "angle_pt_state";
 
+/* Each tab has its own address. They aren't files, so they reach this script: it serves the same page (index.html) with
+   that tab's title, description, official (canonical) address and link-preview text, so search engines and shared links
+   see the right tab; the page opens that tab itself. A trailing slash (/market/) redirects to /market. */
+const TAB_PAGES = {
+  "/points": { title: "Points League Rankings 2026-27 · Angle Fantasy Basketball", desc: "Fantasy basketball points-league rankings for 2026-27 with Yahoo, ESPN or your own scoring, updated every week from real games." },
+  "/market": { title: "Angle Market: Fantasy Basketball Player Prices · Angle Fantasy Basketball", desc: "Every NBA player priced like a stock by his fantasy value per game. Find buy-low and sell-high targets and keep a watchlist." },
+  "/matchup": { title: "Fantasy Basketball Matchup Projector · Angle Fantasy Basketball", desc: "Project a head-to-head fantasy basketball week: both rosters, every category or fantasy points, from that week's games and injuries." },
+  "/box-scores": { title: "Live Fantasy Basketball Box Scores · Angle Fantasy Basketball", desc: "Live NBA box scores with fantasy points for every player, updated every 30 seconds, plus play-by-play and past nights." },
+  "/schedule": { title: "NBA Schedule for Fantasy Basketball 2026-27 · Angle Fantasy Basketball", desc: "Every NBA team's schedule by fantasy week: games in your fantasy playoffs, low-volume nights for streaming, and back-to-backs." },
+  "/my-league": { title: "My League (beta) · Angle Fantasy Basketball", desc: "Your Fantrax or Sleeper league with Angle's projections: standings, matchups, trades and team values.", noindex: true }
+};
+async function tabPage(req, env, url) {
+  const t = TAB_PAGES[url.pathname], home = await env.ASSETS.fetch(new Request(new URL("/", url), req));
+  if (!home.ok) return home;
+  const href = SITE + url.pathname, attr = (name, value) => ({ element: el => el.setAttribute(name, value) });
+  const page = new HTMLRewriter()
+    .on("title", { element: el => el.setInnerContent(t.title) })
+    .on('meta[name="description"]', attr("content", t.desc))
+    .on('link[rel="canonical"]', attr("href", href))
+    .on('meta[property="og:url"]', attr("content", href))
+    .on('meta[property="og:title"]', attr("content", t.title))
+    .on('meta[name="twitter:title"]', attr("content", t.title))
+    .on('meta[property="og:description"]', attr("content", t.desc))
+    .on('meta[name="twitter:description"]', attr("content", t.desc))
+    .on("head", { element: el => { if (t.noindex) el.append('<meta name="robots" content="noindex">', { html: true }); } })
+    .transform(home);
+  const headers = new Headers(page.headers); headers.set("content-type", "text/html; charset=utf-8");
+  return new Response(page.body, { status: 200, headers });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    if ((req.method === "GET" || req.method === "HEAD") && !url.pathname.startsWith("/api/")) {
+      const bare = url.pathname.replace(/\/+$/, "");
+      if (bare !== url.pathname && TAB_PAGES[bare]) return Response.redirect(SITE + bare + url.search, 301);
+      if (TAB_PAGES[url.pathname]) return await tabPage(req, env, url);
+    }
     if (!url.pathname.startsWith("/api/patreon/")) return env.ASSETS.fetch(req);
     try {
       switch (url.pathname) {
