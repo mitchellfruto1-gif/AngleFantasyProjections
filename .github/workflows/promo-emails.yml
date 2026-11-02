@@ -1,8 +1,9 @@
 name: Promo emails
 
 # Emails ready-to-post promo images with suggested text.
-#   Daily (every morning): top 10 performers of the night (9-cat and points), the Angle Market's 5 buy lows and
-#     5 sell highs with each player's Market card PNG, and on Wed (punt impact) / Thu (what didn't change) that day's Monday-changelog post.
+#   Daily (every morning): the Angle Market's 5 buy lows and 5 sell highs with each player's Market card PNG, and on
+#     Wed (punt impact) / Thu (what didn't change) that day's Monday-changelog post. The night's top 10 performers
+#     (9-cat and points) go out the night before from the Night promo workflow; they're added here only if that email didn't go out.
 #   Weekly (Monday morning): saves the encrypted Monday snapshot (data/monday/), then the 4-post ANGLE MONDAY UPDATE
 #     thread with its header / risers / fallers images, plus the top 25 of the week and the Market movers.
 #   Snapshot (Run workflow only): saves a snapshot and sends nothing; run it once to start the Monday-to-Monday diff.
@@ -38,6 +39,16 @@ jobs:
           elif [ "${{ github.event.schedule }}" = "45 13 * * 1" ]; then mode="weekly"
           else mode="daily"; fi
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "night=$(TZ=America/New_York date -d 'yesterday' +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Did last night's top 10 email go out?
+        id: night
+        if: steps.mode.outputs.mode == 'daily'
+        uses: actions/cache/restore@v4
+        with:
+          path: .promo-night
+          key: promo-night-${{ steps.mode.outputs.night }}
+          lookup-only: true
 
       - name: Serve the site locally
         run: |
@@ -51,7 +62,7 @@ jobs:
           ANGLE_CODE: ${{ secrets.ANGLE_CODE }}
           SITE_URL: ${{ vars.SITE_URL }}
           MONDAY_SAFE: ${{ vars.MONDAY_SAFE }}   # "true" = posts name only players in the free top 25 (default: full ranks)
-        run: ./scripts/promo_shots.ps1 -Mode ${{ steps.mode.outputs.mode }} -Site "$env:SITE_URL"
+        run: ./scripts/promo_shots.ps1 -Mode ${{ steps.mode.outputs.mode }} -Site "$env:SITE_URL" ${{ steps.mode.outputs.mode == 'daily' && steps.night.outputs.cache-hit != 'true' && format('-Top10 {0}', steps.mode.outputs.night) || '' }}
 
       - name: Save the Monday snapshot
         if: steps.mode.outputs.mode != 'daily'
