@@ -1,0 +1,104 @@
+name: Night promo
+
+# Emails the night's top 10 performers (9-cat and points) as soon as the night's last game is final, so they can be
+# posted the same night. Checks ESPN's scoreboard every 15 minutes through the evening; once every game is over it
+# renders both cards from ESPN's box scores and emails them. Sent once per night: a cache entry named for the game date
+# marks it done (no commits). If no night email went out, the morning Promo emails workflow includes the top 10s instead.
+# Nothing is posted to X: everything arrives by email for review. The recipient, Gmail login and access code are
+# repository secrets, so none of them appear in this public file or its logs.
+on:
+  schedule:
+    - cron: "*/15 22,23 * * *"   # 5:00-11:59 PM Eastern (standard time)
+    - cron: "*/15 0-8 * * *"     # 7 PM-3:59 AM Eastern: covers late West Coast games and overtime
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Game date to send (YYYY-MM-DD, US Eastern). Empty = tonight. Sends even if already sent."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promo-night
+  cancel-in-progress: false
+
+jobs:
+  night:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Is tonight's last game final?
+        id: check
+        shell: pwsh
+        env:
+          FORCE_DATE: ${{ inputs.date }}
+        run: |
+          # the game night: the US Eastern date six hours ago (so 1 AM Eastern still counts as the night before)
+          $et = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([datetime]::UtcNow.AddHours(-6), "America/New_York")
+          $day = if ($env:FORCE_DATE) { $env:FORCE_DATE } else { $et.ToString("yyyy-MM-dd") }
+          "day=$day" >> $env:GITHUB_OUTPUT
+          $go = $false
+          try {
+            $sb = Invoke-RestMethod "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=$($day -replace '-', '')" -Headers @{ 'User-Agent' = 'Mozilla/5.0 (compatible; angle-fantasy-ranks/1.0)' }
+            $ev = @($sb.events)
+            $real = @($ev | Where-Object { $_.season.type -ne 1 })   # no preseason posts
+            $open = @($ev | Where-Object { $_.status.type.state -ne 'post' })
+            Write-Host "$day : $($ev.Count) games, $($open.Count) not final, $($real.Count) regular season / playoff"
+            $go = $real.Count -gt 0 -and $open.Count -eq 0
+          } catch { Write-Host "ESPN scoreboard unavailable: $_" }
+          "go=$($go.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
+      - name: Already sent tonight?
+        id: sent
+        if: steps.check.outputs.go == 'true' && inputs.date == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: .promo-night
+          key: promo-night-${{ steps.check.outputs.day }}
+          lookup-only: true
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.go == 'true' && steps.sent.outputs.cache-hit != 'true'
+
+      - name: Serve the site locally
+        if: steps.check.outputs.go == 'true' && steps.sent.outputs.cache-hit != 'true'
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 >/dev/null 2>&1 &
+          sleep 2
+
+      - name: Make the top 10 images
+        id: shots
+        if: steps.check.outputs.go == 'true' && steps.sent.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          ANGLE_CODE: ${{ secrets.ANGLE_CODE }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: ./scripts/promo_shots.ps1 -Mode night -Night "${{ steps.check.outputs.day }}" -Site "$env:SITE_URL"
+
+      - name: Email them
+        if: steps.shots.outputs.send == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Angle promo bot <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_TO }}
+          subject: ${{ steps.shots.outputs.subject }}
+          html_body: file://promo-out/email.html
+          attachments: promo-out/*.png
+
+      - name: Mark tonight as sent
+        if: steps.shots.outputs.send == 'true'
+        run: mkdir -p .promo-night && echo "${{ steps.check.outputs.day }}" > .promo-night/sent
+
+      - name: Save the sent mark
+        if: steps.shots.outputs.send == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .promo-night
+          key: promo-night-${{ steps.check.outputs.day }}
