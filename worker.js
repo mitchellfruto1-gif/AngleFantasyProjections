@@ -7,6 +7,7 @@
      SESSION_SECRET         secret   any long random string; signs the 7-day login cookie
      ACCESS_CODE            secret   the site's access code, handed only to approved members
      ALLOWLIST              text     Patreon user IDs that always get in (owner, partners, comps), comma separated
+     BETA_TESTERS           text     Patreon user IDs that get the beta features (My League) automatically on every device, comma separated; ALLOWLIST ids get them too
    Who gets in: anyone on ALLOWLIST, or an active patron of this campaign entitled to MIN_CENTS or more ($3 All-Access).
    Saved settings: the D1 database bound as DB (wrangler.jsonc) keeps one row per member (their Patreon ID) with the
    settings the page syncs (saved leagues, custom scoring, watchlist, Matchup rosters). /api/patreon/session hands them
@@ -14,7 +15,9 @@
 import { yahooLoginUrl, yahooExchange, yahooLeagues, yahooLeague, yahooConnected, yahooDisconnect } from "./yahoo.js";
 const CLIENT_ID = "il8brDLuyB0fmm67C1J1Y_sM59spTpUcsmVSi7GXjA5c0XX8hic9CMEE5NgnKyvZ";
 const MIN_CENTS = 300;
-const DAYS = 7;
+/* Login length: the cookie lasts DAYS and is renewed by use (session() below), but never past MAX_DAYS after the Patreon
+   login, so someone who stops paying loses access within MAX_DAYS even if they keep visiting. */
+const DAYS = 30, MAX_DAYS = 90;
 const SESSION = "angle_pt", STATE = "angle_pt_state";
 
 /* Each tab has its own address. They aren't files, so they reach this script: it serves the same page (index.html) with
@@ -62,6 +65,8 @@ export default {
         case "/api/patreon/login": return login(url);
         case "/api/patreon/callback": return await callback(url, req, env);
         case "/api/patreon/session": return await session(req, env);
+        case "/api/patreon/link/start": return await linkStart(env);
+        case "/api/patreon/link/poll": return await linkPoll(url, env);
         case "/api/patreon/logout": return back(url, "/", [cookie(SESSION, "", 0)]);
         case "/api/patreon/status": return status(env);
         case "/api/patreon/prefs": return await prefs(req, env);
@@ -82,7 +87,37 @@ function login(url) {
   const state = hex(crypto.getRandomValues(new Uint8Array(16)));
   const to = new URL("https://www.patreon.com/oauth2/authorize");
   to.search = new URLSearchParams({ response_type: "code", client_id: CLIENT_ID, redirect_uri: redirectUri(url), scope: "identity", state });
-  return back(url, to.href, [cookie(STATE, state, 600, "/api/patreon/")]);
+  const link = /^[0-9a-f]{32}$/.test(url.searchParams.get("link") || "") ? url.searchParams.get("link") : "";   // set when the app (home-screen icon) started this login
+  return back(url, to.href, [cookie(STATE, state, 600, "/api/patreon/"), ...(link ? [cookie(LINK, link, 600, "/api/patreon/")] : [])]);
+}
+
+/* A home-screen app (iPhone "Add to Home Screen") keeps its own cookies, separate from Safari, and a login that happens in
+   Safari never reaches it. So the app asks for a one-time link code (linkStart), opens the normal login with ?link=CODE in
+   Safari, and polls (linkPoll). When that login finishes, the callback files the new session under the code, and the
+   next poll hands it to the app, which sets it as its own cookie. The code is random, expires in 15 minutes and works once. */
+const LINK = "angle_pt_link", LINK_MIN = 15;
+async function linkReady(env) {
+  if (!linkReady.done) { await env.DB.prepare("CREATE TABLE IF NOT EXISTS plink (code TEXT PRIMARY KEY, token TEXT, exp INTEGER NOT NULL)").run(); linkReady.done = true; }
+  await env.DB.prepare("DELETE FROM plink WHERE exp < ?").bind(Date.now()).run();
+}
+async function linkStart(env) {
+  if (!env.DB) return json({ ok: false, error: "not set up" }, 503);
+  await linkReady(env);
+  const code = hex(crypto.getRandomValues(new Uint8Array(16)));
+  await env.DB.prepare("INSERT INTO plink (code, token, exp) VALUES (?, NULL, ?)").bind(code, Date.now() + LINK_MIN * 60000).run();
+  return json({ ok: true, code, minutes: LINK_MIN });
+}
+async function linkPoll(url, env) {
+  const code = url.searchParams.get("code") || "";
+  if (!env.DB || !/^[0-9a-f]{32}$/.test(code)) return json({ ok: false, gone: true });
+  await linkReady(env);
+  const row = await env.DB.prepare("SELECT token FROM plink WHERE code = ?").bind(code).first();
+  if (!row) return json({ ok: false, gone: true });
+  if (!row.token) return json({ ok: true, pending: true });
+  await env.DB.prepare("DELETE FROM plink WHERE code = ?").bind(code).run();
+  const res = json({ ok: true, done: true });
+  res.headers.append("Set-Cookie", cookie(SESSION, row.token, DAYS * 86400));
+  return res;
 }
 
 async function callback(url, req, env) {
@@ -109,8 +144,15 @@ async function callback(url, req, env) {
   const verdict = decide(uid, me, env);
   const clear = cookie(STATE, "", 0, "/api/patreon/");
   if (!verdict) return back(url, "/?" + new URLSearchParams({ patreon: "nope", pid: uid, pn: name }), [clear, cookie(SESSION, "", 0)]);
-  const exp = Math.floor(Date.now() / 1000) + DAYS * 86400;
-  const token = await sign(env, { u: uid, n: name, k: verdict, e: exp });
+  const now = Math.floor(Date.now() / 1000), exp = now + DAYS * 86400;
+  const token = await sign(env, { u: uid, n: name, k: verdict, i: now, e: exp });
+  // started from the home-screen app: file the session under its link code (the app picks it up), and tell this browser to go back
+  const lk = jar[LINK];
+  if (/^[0-9a-f]{32}$/.test(lk || "") && env.DB) {
+    await linkReady(env);
+    const r = await env.DB.prepare("UPDATE plink SET token = ? WHERE code = ? AND token IS NULL").bind(token, lk).run();
+    if (r.meta && r.meta.changes) return back(url, "/?patreon=linked", [clear, cookie(LINK, "", 0, "/api/patreon/"), cookie(SESSION, token, DAYS * 86400)]);
+  }
   return back(url, "/?patreon=ok", [clear, cookie(SESSION, token, DAYS * 86400)]);
 }
 
@@ -132,11 +174,15 @@ function decide(uid, me, env) {
 async function session(req, env) {
   const s = await verify(env, cookies(req)[SESSION]);
   if (!s) return json({ ok: false });
-  const body = { ok: true, uid: s.u, name: s.n, kind: s.k, code: env.ACCESS_CODE };
+  const body = { ok: true, uid: s.u, name: s.n, kind: s.k, code: env.ACCESS_CODE, beta: betaFor(env, s.u) };
   // saved settings ride along with the login (null = none saved yet); left out if the database isn't set up or fails,
   // so a storage problem never blocks a login
   if (env.DB) try { body.prefs = await prefsGet(env, s.u); } catch (e) { console.log("prefs read failed", e && e.message); }
-  return json(body);
+  const res = json(body);
+  // sliding login: once half of the window is used, renew it (to DAYS from now, but never past MAX_DAYS after the Patreon login)
+  const now = Math.floor(Date.now() / 1000), issued = s.i || s.e - 7 * 86400, cap = issued + MAX_DAYS * 86400, e = Math.min(now + DAYS * 86400, cap);
+  if (s.e - now < DAYS * 43200 && e > s.e + 3600) res.headers.append("Set-Cookie", cookie(SESSION, await sign(env, { u: s.u, n: s.n, k: s.k, i: issued, e }), e - now));
+  return res;
 }
 
 /* ---------- saved settings (D1) ---------- */
@@ -243,4 +289,10 @@ async function verify(env, token) {
     const s = JSON.parse(new TextDecoder().decode(unb64u(body)));
     return s.e > Date.now() / 1000 ? s : null;
   } catch (e) { return null; }
+}
+
+// beta features switched on for a member's account (so the home-screen app has them without ?beta= in the address)
+function betaFor(env, uid) {
+  const ids = String(env.BETA_TESTERS || "").split(/[\s,]+/).concat(String(env.ALLOWLIST || "").split(/[\s,]+/)).filter(Boolean);
+  return ids.includes(String(uid)) ? ["league"] : [];
 }
