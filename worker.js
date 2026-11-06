@@ -11,6 +11,7 @@
    Saved settings: the D1 database bound as DB (wrangler.jsonc) keeps one row per member (their Patreon ID) with the
    settings the page syncs (saved leagues, custom scoring, watchlist, Matchup rosters). /api/patreon/session hands them
    back with the login; /api/patreon/prefs (PUT) saves them. */
+import { yahooLoginUrl, yahooExchange, yahooLeagues, yahooLeague, yahooConnected, yahooDisconnect } from "./yahoo.js";
 const CLIENT_ID = "il8brDLuyB0fmm67C1J1Y_sM59spTpUcsmVSi7GXjA5c0XX8hic9CMEE5NgnKyvZ";
 const MIN_CENTS = 300;
 const DAYS = 7;
@@ -54,6 +55,7 @@ export default {
       if (bare !== url.pathname && TAB_PAGES[bare]) return Response.redirect(SITE + bare + url.search, 301);
       if (TAB_PAGES[url.pathname]) return await tabPage(req, env, url);
     }
+    if (url.pathname.startsWith("/api/yahoo/")) return await yahooRoute(url, req, env);
     if (!url.pathname.startsWith("/api/patreon/")) return env.ASSETS.fetch(req);
     try {
       switch (url.pathname) {
@@ -173,9 +175,40 @@ async function prefs(req, env) {
   }
 }
 
+/* ---------- Yahoo Fantasy (yahoo.js): members connect their Yahoo account; the page reads their leagues through here ---------- */
+const YSTATE = "angle_yh_state", yRedirect = () => SITE + "/api/yahoo/callback";
+async function yahooRoute(url, req, env) {
+  const s = await verify(env, cookies(req)[SESSION]);
+  if (!s) return url.pathname === "/api/yahoo/login" ? back(url, "/my-league?beta=league,yahoo&yahoo=login") : json({ ok: false, error: "Log in with Patreon first." }, 401);
+  if (!env.DB || !env.YAHOO_CLIENT_SECRET) return url.pathname === "/api/yahoo/login" ? back(url, "/my-league?beta=league,yahoo&yahoo=error") : json({ ok: false, error: "Yahoo isn't set up yet." }, 503);
+  const clear = cookie(YSTATE, "", 0, "/api/yahoo/");
+  try {
+    switch (url.pathname) {
+      case "/api/yahoo/login": { const state = hex(crypto.getRandomValues(new Uint8Array(16))); return back(url, yahooLoginUrl(yRedirect(), state), [cookie(YSTATE, state, 600, "/api/yahoo/")]); }
+      case "/api/yahoo/callback": {
+        const q = url.searchParams;
+        if (q.get("error")) return back(url, "/my-league?beta=league,yahoo&yahoo=cancel", [clear]);
+        if (!q.get("code") || !q.get("state") || q.get("state") !== cookies(req)[YSTATE]) return back(url, "/my-league?beta=league,yahoo&yahoo=error", [clear]);
+        await yahooExchange(env, s.u, q.get("code"), yRedirect()); return back(url, "/my-league?beta=league,yahoo&yahoo=ok", [clear]);
+      }
+      case "/api/yahoo/status": return json({ ok: true, connected: await yahooConnected(env, s.u) });
+      case "/api/yahoo/leagues": return json({ ok: true, leagues: await yahooLeagues(env, s.u) });
+      case "/api/yahoo/league": return json({ ok: true, league: await yahooLeague(env, s.u, url.searchParams.get("key") || "") });
+      case "/api/yahoo/disconnect":
+        if (req.method !== "POST") return json({ ok: false, error: "use POST" }, 405);
+        await yahooDisconnect(env, s.u); return json({ ok: true });
+    }
+    return json({ ok: false, error: "not found" }, 404);
+  } catch (e) {
+    console.log("yahoo error", e && e.stack || e);
+    if (url.pathname === "/api/yahoo/callback") return back(url, "/my-league?beta=league,yahoo&yahoo=error", [clear]);
+    return json({ ok: false, error: e.code === 401 ? "Yahoo needs to be connected again." : (e.message || "Yahoo error"), reconnect: e.code === 401 }, e.code || 500);
+  }
+}
+
 // setup check: says which settings the live site can see (never their values)
 function status(env) {
-  return json({ PATREON_CLIENT_SECRET: !!env.PATREON_CLIENT_SECRET, SESSION_SECRET: !!env.SESSION_SECRET, ACCESS_CODE: !!env.ACCESS_CODE,
+  return json({ PATREON_CLIENT_SECRET: !!env.PATREON_CLIENT_SECRET, SESSION_SECRET: !!env.SESSION_SECRET, ACCESS_CODE: !!env.ACCESS_CODE, YAHOO_CLIENT_SECRET: !!env.YAHOO_CLIENT_SECRET,
     ALLOWLIST_ids: String(env.ALLOWLIST || "").split(/[\s,]+/).filter(Boolean).length, DB: !!env.DB });
 }
 
