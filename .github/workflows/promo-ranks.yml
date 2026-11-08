@@ -1,0 +1,86 @@
+name: Promo ranks
+
+# Emails a ready-to-post "real rank" promo image (or two) every morning, with suggested post text. Every image carries the
+# website name in its footer. The cards use real season-to-date production from history.json (updated by the 11:00 UTC
+# data job), ranked the same way as the site's Real view. One theme per weekday so the feed stays varied:
+#   Mon  Risers & fallers, 9-cat and points (real rank now vs the end of last week)
+#   Tue  Rookie check-in (preseason rank, real 9-cat rank, real points rank)
+#   Wed  Injury report (top-ranked players who are out, with return dates)
+#   Thu  Preseason vs. reality (9-cat: who is beating or missing our projection)
+#   Fri  Fantasy playoff schedules (best and toughest, from the Schedule tab)
+#   Sat  Category leaders + dynasty risers and fallers (November vs July)
+#   Sun  Next week's schedule (games per team, low-volume nights; from the Schedule tab)
+# Run it by hand to pick the cards (comma list: rookies, movers-cat, movers-pts, vs-preseason, leaders, sched-week,
+# sched-playoffs, injuries, dynasty-movers; empty = today's).
+# Nothing is posted to X: everything arrives by email for review. The recipient, Gmail login and access code are
+# repository secrets, so none of them appear in this public file or its logs.
+on:
+  schedule:
+    - cron: "15 14 * * *"   # every day, about 7:15 AM Pacific, after the 11:00 UTC data update
+  workflow_dispatch:
+    inputs:
+      cards:
+        description: "Cards to send (comma list). Empty = today's theme."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promo-ranks
+  cancel-in-progress: false
+
+jobs:
+  ranks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick today's cards
+        id: pick
+        env:
+          CARDS: ${{ inputs.cards }}
+        run: |
+          if [ -n "$CARDS" ]; then cards="$CARDS"; else
+            case "$(TZ=America/Los_Angeles date +%u)" in
+              1) cards="movers-cat,movers-pts" ;;
+              2) cards="rookies" ;;
+              3) cards="injuries" ;;
+              4) cards="vs-preseason" ;;
+              5) cards="sched-playoffs" ;;
+              6) cards="leaders,dynasty-movers" ;;
+              7) cards="sched-week" ;;
+            esac
+          fi
+          echo "cards=$cards" >> "$GITHUB_OUTPUT"
+
+      - name: Serve the site locally
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 >/dev/null 2>&1 &
+          sleep 2
+
+      - name: Make the promo images
+        id: shots
+        shell: pwsh
+        env:
+          ANGLE_CODE: ${{ secrets.ANGLE_CODE }}
+          SITE_URL: ${{ vars.SITE_URL }}
+          CARDS: ${{ steps.pick.outputs.cards }}
+        run: ./scripts/promo_shots.ps1 -Mode board -Only "$env:CARDS" -Site "$env:SITE_URL"
+
+      - name: Email them
+        if: steps.shots.outputs.send == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Angle promo bot <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_TO }}
+          subject: ${{ steps.shots.outputs.subject }}
+          html_body: file://promo-out/email.html
+          attachments: promo-out/*.png
