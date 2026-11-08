@@ -8,7 +8,8 @@
 # (data/monday/YYYY-MM-DD.json, committed by the workflow), then the Monday thread and images, plus the weekly top 25 and Market movers.
 # Snapshot: only saves the snapshot (run once to start the week-to-week diff). Nothing is posted anywhere.
 param(
-  [ValidateSet("daily", "night", "weekly", "snapshot")][string]$Mode = "daily",
+  [ValidateSet("daily", "night", "weekly", "snapshot", "board")][string]$Mode = "daily",
+  [string]$Only = "",     # board mode: comma list of real-rank cards (default: all of them); also works to pick one card, e.g. -Only rookies
   [string]$Night = "",     # night mode: the US Eastern game date
   [string]$Top10 = "",     # daily mode: add the top 10s for this game date (YYYY-MM-DD) because the night email didn't go out
   [string]$Base = "http://127.0.0.1:8000",
@@ -23,7 +24,8 @@ if (-not $code) { throw "The ANGLE_CODE secret is not set." }
 $pt = $null; foreach ($tz in "America/Los_Angeles", "Pacific Standard Time") { if (-not $pt) { try { $pt = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([datetime]::UtcNow, $tz) } catch {} } }
 $midweek = @{ Wednesday = "monday-wed"; Thursday = "monday-thu" }[$pt.DayOfWeek.ToString()]
 if ($Mode -eq "night" -and $Night -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "Night mode needs -Night YYYY-MM-DD." }
-$kinds = switch ($Mode) { "weekly" { @("monday-snap", "monday", "week-cat", "week-pts", "week-mkt") } "snapshot" { @("monday-snap") } "night" { @("day-cat", "day-pts") } default { @($(if ($Top10) { @("day-cat", "day-pts") }) + @("mkt-picks") + @($midweek | Where-Object { $_ })) } }
+$boardAll = @("rookies", "movers-cat", "movers-pts", "vs-preseason", "leaders", "sched-week", "sched-playoffs", "injuries", "dynasty-movers")
+$kinds = switch ($Mode) { "board" { if ($Only) { @($Only -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { $boardAll } } "weekly" { @("monday-snap", "monday", "week-cat", "week-pts", "week-mkt") } "snapshot" { @("monday-snap") } "night" { @("day-cat", "day-pts") } default { @($(if ($Top10) { @("day-cat", "day-pts") }) + @("mkt-picks") + @($midweek | Where-Object { $_ })) } }
 $extra = $(if ($env:MONDAY_SAFE -eq "true") { "&safe=1" } else { "" }) + $(if ($Mode -eq "night") { "&night=$Night" } else { "" })
 if (-not $Browser) { foreach ($c in "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "C:\Program Files\Google\Chrome\Application\chrome.exe", "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe") { if (Test-Path $c) { $Browser = $c; break } } }
 if (-not $Browser) { throw "No Chrome or Edge found." }
@@ -88,9 +90,9 @@ $ws.Dispose(); Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 
 $ok = @($results | Where-Object { -not $_.error })
 $enc = { param($s) [Net.WebUtility]::HtmlEncode($s) }
-$label = @{ "monday-snap" = "Monday snapshot saved"; "monday" = "ANGLE MONDAY UPDATE - the thread (post in order, images attached)"; "monday-wed" = "Wednesday post - punt impact (injured players left out)"; "monday-thu" = "Thursday post - what didn't change"; "mkt-picks" = "Angle Market - buy lows and sell highs (one card per pick)"; "day-cat" = "Top 10 of the night - 9-Cat"; "day-pts" = "Top 10 of the night - Points"; "week-cat" = "Top 25 of the week - 9-Cat"; "week-pts" = "Top 25 of the week - Points"; "week-mkt" = "Angle Market - the week's gainers and losers" }
+$label = @{ "monday-snap" = "Monday snapshot saved"; "monday" = "ANGLE MONDAY UPDATE - the thread (post in order, images attached)"; "monday-wed" = "Wednesday post - punt impact (injured players left out)"; "monday-thu" = "Thursday post - what didn't change"; "mkt-picks" = "Angle Market - buy lows and sell highs (one card per pick)"; "day-cat" = "Top 10 of the night - 9-Cat"; "day-pts" = "Top 10 of the night - Points"; "week-cat" = "Top 25 of the week - 9-Cat"; "week-pts" = "Top 25 of the week - Points"; "week-mkt" = "Angle Market - the week's gainers and losers"; "rookies" = "Rookie check-in - real ranks"; "movers-cat" = "Risers and fallers - real 9-cat rank"; "movers-pts" = "Risers and fallers - real points rank"; "vs-preseason" = "Preseason rank vs real rank (9-cat)"; "leaders" = "Category leaders - all nine categories"; "sched-week" = "Schedule - games per team this week (Schedule tab)"; "sched-playoffs" = "Schedule - fantasy playoff weeks (Schedule tab)"; "injuries" = "Injury report - top players out"; "dynasty-movers" = "Dynasty risers and fallers - November vs July" }
 $range = @($ok | Where-Object { $_.range } | Select-Object -First 1 | ForEach-Object { $_.range })[0]
-$subject = switch ($Mode) { "weekly" { "ANGLE MONDAY UPDATE thread + weekly promo ($range)" } "snapshot" { "Angle Monday snapshot saved" } "night" { "Angle tonight: top 10 9-cat and points performers ($range)" } default { "Angle daily promo: $(if (@($ok | Where-Object { $_.kind -like 'day-*' }).Count) { 'top 10, ' })Market buy lows / sell highs$(if ($midweek) { ' + changelog post' }) ($range)" } }
+$subject = switch ($Mode) { "weekly" { "ANGLE MONDAY UPDATE thread + weekly promo ($range)" } "snapshot" { "Angle Monday snapshot saved" } "night" { "Angle tonight: top 10 9-cat and points performers ($range)" } "board" { "Angle promo: $((@($ok | ForEach-Object { $_.title }) -join ' + ')) ($range)" } default { "Angle daily promo: $(if (@($ok | Where-Object { $_.kind -like 'day-*' }).Count) { 'top 10, ' })Market buy lows / sell highs$(if ($midweek) { ' + changelog post' }) ($range)" } }
 $html = New-Object Text.StringBuilder
 [void]$html.Append("<div style=`"font-family:Arial,sans-serif;max-width:640px;color:#1E0F24`"><h2 style=`"color:#7D1D98;margin:0 0 6px`">$(& $enc $subject)</h2><p style=`"color:#6E5A72;margin:0 0 18px`">The images are attached. Each one has suggested post text below; swap in your links before posting.</p>")
 foreach ($r in $results) {
@@ -111,7 +113,7 @@ foreach ($r in $results) {
 # a day with no new games (or a missed data update) sends nothing rather than repeating yesterday
 $last = if ($ok.Count) { $ok[0].last } else { "" }
 $fresh = $last -and ([datetime]::ParseExact($last, "yyyy-MM-dd", $null) -ge [datetime]::UtcNow.Date.AddDays(-2))
-$send = $ok.Count -gt 0 -and $Mode -ne "snapshot" -and ($Mode -eq "weekly" -or $Mode -eq "night" -or $fresh)
+$send = $ok.Count -gt 0 -and $Mode -ne "snapshot" -and ($Mode -eq "weekly" -or $Mode -eq "night" -or $fresh)   # board cards use the latest game day too, so $fresh guards them
 Write-Host "subject: $subject | images: $($ok.Count) | latest game day: $last | send: $send"
 if ($env:GITHUB_OUTPUT) { Add-Content $env:GITHUB_OUTPUT "subject=$subject"; Add-Content $env:GITHUB_OUTPUT "send=$($send.ToString().ToLower())" }
 if (-not $ok.Count) { exit 1 }
