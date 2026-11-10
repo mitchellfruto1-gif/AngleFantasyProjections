@@ -30,10 +30,27 @@ $extra = $(if ($env:MONDAY_SAFE -eq "true") { "&safe=1" } else { "" }) + $(if ($
 if (-not $Browser) { foreach ($c in "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "C:\Program Files\Google\Chrome\Application\chrome.exe", "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe") { if (Test-Path $c) { $Browser = $c; break } } }
 if (-not $Browser) { throw "No Chrome or Edge found." }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-$prof = Join-Path ([IO.Path]::GetTempPath()) "angle-promo-$Port"; Remove-Item -Recurse -Force $prof -ErrorAction SilentlyContinue
-$proc = Start-Process $Browser -ArgumentList "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--user-data-dir=$prof", "--remote-debugging-port=$Port", "--window-size=1080,1350", "about:blank" -PassThru
-$tgt = $null; for ($i = 0; $i -lt 60 -and -not $tgt; $i++) { Start-Sleep -Milliseconds 300; try { $tgt = (Invoke-RestMethod "http://127.0.0.1:$Port/json") | Where-Object { $_.type -eq "page" } | Select-Object -First 1 } catch {} }
-if (-not $tgt) { throw "The browser did not start." }
+# Start the browser and find its DevTools page. A cold GitHub runner can be slow or short of shared memory, and one morning Chrome never offered a page
+# (the Risers and Fallers run failed at exactly this step), so: more patience (about 40 s per try), no /dev/shm (tiny on runners), a page created by hand
+# if Chrome starts without one, up to 3 tries on fresh ports, and Chrome's own error output in the log when a try fails.
+function Start-Chrome([int]$port) {
+  $prof = Join-Path ([IO.Path]::GetTempPath()) "angle-promo-$port"; Remove-Item -Recurse -Force $prof -ErrorAction SilentlyContinue
+  $errf = Join-Path ([IO.Path]::GetTempPath()) "angle-chrome-$port.err"
+  $p = Start-Process $Browser -ArgumentList "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-extensions", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--user-data-dir=$prof", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=$port", "--window-size=1080,1350", "about:blank" -PassThru -RedirectStandardError $errf
+  $tgt = $null
+  for ($i = 0; $i -lt 100 -and -not $tgt; $i++) {
+    Start-Sleep -Milliseconds 400; if ($p.HasExited -and $i -ge 12) { break }   # (a launcher stub may exit while the browser carries on, so only give up on a dead process after a few seconds)
+    try { $list = Invoke-RestMethod "http://127.0.0.1:$port/json" -TimeoutSec 3; $tgt = $list | Where-Object { $_.type -eq "page" } | Select-Object -First 1
+      if (-not $tgt -and $i -ge 8 -and ($i % 8) -eq 0) { try { $tgt = Invoke-RestMethod "http://127.0.0.1:$port/json/new?about:blank" -Method Put -TimeoutSec 3 } catch {} } } catch {}
+  }
+  if ($tgt) { return [pscustomobject]@{ proc = $p; tgt = $tgt } }
+  Write-Host "Chrome on port $port gave no DevTools page (exited: $($p.HasExited)). Its last messages:"
+  if (Test-Path $errf) { Get-Content $errf -Tail 15 | ForEach-Object { Write-Host "  $_" } }
+  Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return $null
+}
+$chrome = $null; foreach ($try in 0..2) { $chrome = Start-Chrome ($Port + $try); if ($chrome) { break }; if ($try -lt 2) { Write-Host "Trying the browser again ($($try + 2) of 3)"; Start-Sleep 3 } }
+if (-not $chrome) { throw "The browser never offered a DevTools page after 3 tries (Chrome's messages are above)." }
+$proc = $chrome.proc; $tgt = $chrome.tgt
 $ws = New-Object Net.WebSockets.ClientWebSocket; $ct = [Threading.CancellationToken]::None; $ws.ConnectAsync([Uri]$tgt.webSocketDebuggerUrl, $ct).Wait()
 $script:id = 0
 # returns the raw JSON reply (screenshots are too big for ConvertFrom-Json in Windows PowerShell)
@@ -54,10 +71,17 @@ $codeJs = ($code.Trim().ToUpper() | ConvertTo-Json)
 $results = @()
 foreach ($k in $kinds) {
   $url = "$Base/index.html?promo=$k$extra" + $(if ($Site) { "&site=" + [Uri]::EscapeDataString($Site) } else { "" })
-  [void](SendRaw "Page.navigate" @{ url = $url })
-  $txt = ""; for ($i = 0; $i -lt 120 -and -not $txt; $i++) { Start-Sleep -Milliseconds 500; $txt = Eval "(document.getElementById('promo-ready')||{}).textContent||''" }
+  # a card that isn't ready (stats still loading, a slow page) is tried again on a fresh page load, up to 3 times; a real error (no data, locked) is not
+  $txt = ""; $r = $null
+  foreach ($attempt in 1..3) {
+    [void](SendRaw "Page.navigate" @{ url = $url })
+    $txt = ""; for ($i = 0; $i -lt 120 -and -not $txt; $i++) { Start-Sleep -Milliseconds 500; $txt = Eval "(document.getElementById('promo-ready')||{}).textContent||''" }
+    $r = if ($txt) { $txt | ConvertFrom-Json } else { $null }
+    $notReady = (-not $txt) -or ($r.error -match "aren't loaded|hasn't loaded|hasn't finished|timed out")
+    if (-not $notReady) { break }
+    Write-Host "$($k): attempt $attempt not ready ($(if ($r) { $r.error } else { 'timed out' }))$(if ($attempt -lt 3) { ', trying again' })"; Start-Sleep 4
+  }
   if (-not $txt) { $results += [pscustomobject]@{ kind = $k; error = "timed out" }; continue }
-  $r = $txt | ConvertFrom-Json
   if ($r.error) { $results += $r; Write-Host "$($k): $($r.error)"; continue }
   # the morning fallback only sends the night it was asked for (a night with no games doesn't repeat an older one)
   if ($Mode -eq "daily" -and $k -like "day-*" -and $r.last -ne $Top10) { Write-Host "$($k): no games on $Top10 (latest is $($r.last)), skipped"; continue }
