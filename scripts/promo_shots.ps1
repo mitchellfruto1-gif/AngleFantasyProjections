@@ -132,7 +132,7 @@ foreach ($r in $results) {
   }
   [void]$html.Append("<p style=`"margin:0 0 6px;color:#6E5A72;font-size:13px`">Image: $(& $enc $r.file)</p><pre style=`"white-space:pre-wrap;font-family:Arial,sans-serif;font-size:15px;background:#F7EEE3;border:1px solid #E3D3C2;border-radius:8px;padding:12px`">$(& $enc $r.caption)</pre>")
 }
-[void]$html.Append("<p style=`"color:#6E5A72;font-size:12px;margin-top:24px`">$(if ($Mode -eq 'night') { "Sent by the Night promo workflow once the night's last game went final. Box scores straight from ESPN." } else { "Sent by the Promo emails workflow. Real game data from the site's morning update." })</p></div>")
+[void]$html.Append("<p style=`"color:#6E5A72;font-size:12px;margin-top:24px`">$(if ($Mode -eq 'night') { "Sent by the Night promo workflow once the night's last game went final. Box scores straight from ESPN." } elseif ($Mode -eq 'board') { "Sent by the Promo ranks workflow. Real ranks from the site's morning update." } else { "Sent by the Promo emails workflow. Real game data from the site's morning update." })</p></div>")
 [IO.File]::WriteAllText((Join-Path (Resolve-Path $OutDir) "email.html"), $html.ToString(), (New-Object Text.UTF8Encoding $false))
 # a day with no new games (or a missed data update) sends nothing rather than repeating yesterday
 $last = if ($ok.Count) { $ok[0].last } else { "" }
