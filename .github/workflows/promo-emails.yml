@@ -87,3 +87,17 @@ jobs:
           subject: ${{ steps.shots.outputs.subject }}
           html_body: file://promo-out/email.html
           attachments: promo-out/*.png
+
+      - name: Email the failure notice
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: Angle promo bot <${{ secrets.MAIL_USERNAME }}>
+          to: ${{ secrets.MAIL_TO }}
+          subject: "Angle promo FAILED: Promo emails (${{ steps.mode.outputs.mode }})"
+          html_body: "<p>The promo run did not finish, so nothing was sent for it.</p><p>The log shows the step that failed and why: <a href='https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'>open the run</a>. You can run it again from the Actions tab (Run workflow).</p>"
