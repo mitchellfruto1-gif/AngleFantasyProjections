@@ -9,9 +9,9 @@ name: Promo ranks
 #   Thu  Preseason vs. reality (9-cat: who is beating or missing our projection)
 #   Fri  Fantasy playoff schedules (best and toughest, from the Schedule tab)
 #   Sat  Category leaders + dynasty risers and fallers (November vs July)
-#   Sun  Next week's schedule (games per team, low-volume nights; from the Schedule tab)
+#   Sun  Next week's schedule (games per team, low-volume nights; from the Schedule tab) + Angle Market sector report
 # Run it by hand to pick the cards (comma list: rookies, movers-cat, movers-pts, vs-preseason, leaders, sched-week,
-# sched-playoffs, injuries, dynasty-movers; empty = today's).
+# sched-playoffs, injuries, dynasty-movers, sectors; empty = today's).
 # Nothing is posted to X: everything arrives by email for review. The recipient, Gmail login and access code are
 # repository secrets, so none of them appear in this public file or its logs.
 on:
@@ -51,7 +51,7 @@ jobs:
               4) cards="vs-preseason" ;;
               5) cards="sched-playoffs" ;;
               6) cards="leaders,dynasty-movers" ;;
-              7) cards="sched-week" ;;
+              7) cards="sched-week,sectors" ;;
             esac
           fi
           echo "cards=$cards" >> "$GITHUB_OUTPUT"
