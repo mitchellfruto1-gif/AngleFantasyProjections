@@ -4,13 +4,14 @@ name: Promo ranks
 # website name in its footer. The cards use real season-to-date production from history.json (updated by the 11:00 UTC
 # data job), ranked the same way as the site's Real view. One theme per weekday so the feed stays varied:
 #   Mon  Risers & fallers, 9-cat and points (real rank now vs the end of last week)
-#   Tue  Rookie check-in (preseason rank, real 9-cat rank, real points rank)
-#   Wed  Injury report (top-ranked players who are out, with return dates)
-#   Thu  Preseason vs. reality (9-cat: who is beating or missing our projection)
+#   Tue  Rookie check-in (real 9-cat rank, real points rank, per-game stats)
+#   Wed  Injury report (the biggest names who are out, with return dates; no ranks)
+#   Thu  Category leaders (per-game leaders in all 9 categories)
 #   Fri  Fantasy playoff schedules (best and toughest, from the Schedule tab)
-#   Sat  Category leaders + dynasty risers and fallers (November vs July)
+#   Sat  Dynasty risers and fallers (November vs July)
 #   Sun  Next week's schedule (games per team, low-volume nights; from the Schedule tab) + Angle Market sector report
-# Run it by hand to pick the cards (comma list: rookies, movers-cat, movers-pts, vs-preseason, leaders, sched-week,
+# No preseason numbers in any card (they're outdated), so the old Preseason vs. reality card was retired (2026-11-11).
+# Run it by hand to pick the cards (comma list: rookies, movers-cat, movers-pts, leaders, sched-week,
 # sched-playoffs, injuries, dynasty-movers, sectors; empty = today's).
 # Nothing is posted to X: everything arrives by email for review. The recipient, Gmail login and access code are
 # repository secrets, so none of them appear in this public file or its logs.
@@ -48,9 +49,9 @@ jobs:
               1) cards="movers-cat,movers-pts" ;;
               2) cards="rookies" ;;
               3) cards="injuries" ;;
-              4) cards="vs-preseason" ;;
+              4) cards="leaders" ;;
               5) cards="sched-playoffs" ;;
-              6) cards="leaders,dynasty-movers" ;;
+              6) cards="dynasty-movers" ;;
               7) cards="sched-week,sectors" ;;
             esac
           fi
