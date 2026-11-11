@@ -59,7 +59,6 @@ export default {
       if (TAB_PAGES[url.pathname]) return await tabPage(req, env, url);
     }
     if (url.pathname.startsWith("/api/yahoo/")) return await yahooRoute(url, req, env);
-    if (url.pathname.startsWith("/api/espn/")) return await espnRoute(url, req, env);
     if (!url.pathname.startsWith("/api/patreon/")) return env.ASSETS.fetch(req);
     try {
       switch (url.pathname) {
@@ -251,31 +250,6 @@ async function yahooRoute(url, req, env) {
     if (url.pathname === "/api/yahoo/callback") return back(url, "/my-league?beta=league,yahoo&yahoo=error", [clear]);
     return json({ ok: false, error: e.code === 401 ? "Yahoo needs to be connected again." : (e.message || "Yahoo error"), reconnect: e.code === 401 }, e.code || 500);
   }
-}
-
-/* ---------- ESPN private leagues ----------
-   Public ESPN leagues never come here: the page reads them from ESPN directly. For a private league the page sends the
-   member's own ESPN login cookies (espn_s2 and SWID, which they pasted and which stay in their browser) with the league
-   number; this passes them to ESPN for that one read-only request and returns ESPN's answer. Nothing is stored or
-   logged. Logged-in Patreon members only, so this isn't an open relay. */
-const ESPN_LG = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/";
-const ESPN_VIEWS = "view=mTeam&view=mRoster&view=mSettings&view=mMatchupScore&view=mStatus";
-async function espnRoute(url, req, env) {
-  if (url.pathname !== "/api/espn/league") return json({ ok: false, error: "not found" }, 404);
-  if (req.method !== "POST") return json({ ok: false, error: "use POST" }, 405);
-  if (!await verify(env, cookies(req)[SESSION])) return json({ ok: false, error: "Log in with Patreon first." }, 401);
-  let b = null; try { b = await req.json(); } catch (e) {}
-  const id = String((b && b.id) || ""), season = String((b && b.season) || ""), s2 = String((b && b.s2) || "").trim();
-  const sw = /^\{?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\}?$/i.exec(String((b && b.swid) || "").trim());
-  if (!/^\d{3,11}$/.test(id) || !/^20\d\d$/.test(season)) return json({ ok: false, error: "That isn't an ESPN league ID." }, 400);
-  if (!/^[A-Za-z0-9%+/=_.-]{40,2000}$/.test(s2) || !sw) return json({ ok: false, error: "Your saved ESPN login doesn't look right. Forget it on My Leagues and paste espn_s2 and SWID again." }, 400);
-  let r;
-  try { r = await fetch(`${ESPN_LG}${season}/segments/0/leagues/${id}?${ESPN_VIEWS}`, { headers: { Cookie: `espn_s2=${s2}; SWID={${sw[1].toUpperCase()}}`, Accept: "application/json" } }); }
-  catch (e) { return json({ ok: false, error: "Couldn't reach ESPN. Try again in a minute." }, 502); }
-  if (r.status === 401 || r.status === 403) return json({ ok: false, error: "ESPN didn't accept your saved login for this league. Make sure your ESPN account is in the league, then forget the login on My Leagues and paste espn_s2 and SWID again (they change when you log out of ESPN)." }, 401);
-  if (r.status === 404) return json({ ok: false, error: "ESPN couldn't find that league this season. Check the number in your league's address (leagueId=…)." }, 404);
-  if (!r.ok) return json({ ok: false, error: `ESPN didn't answer (error ${r.status}). Try again in a minute.` }, 502);
-  return new Response(r.body, { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 }
 
 // setup check: says which settings the live site can see (never their values)
