@@ -2,6 +2,7 @@ name: Daily fantasy ranks
 
 # Every morning at 11:00 UTC (4 AM Pacific / 7 AM Eastern; 3 AM Pacific in winter), after every West Coast game is final.
 # Real / Blend ranks update daily; the Trend graphs add a point when each fantasy week (Mon-Sun) completes.
+# Also refreshes data/preview.json, the free preview's updated projections (needs the ANGLE_CODE secret).
 # Also runs on demand from the Actions tab ("Run workflow").
 on:
   schedule:
@@ -26,11 +27,26 @@ jobs:
         shell: pwsh
         run: ./scripts/update_history.ps1
 
+      # The free preview shows the UPDATED projections (user's call 2026-11-12): the page, unlocked with the access code, works them out from
+      # the box scores just pulled and saves the updated top of each board as data/preview.json. A failure here never blocks the history commit.
+      - name: Serve the site locally
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 >/dev/null 2>&1 &
+          sleep 2
+
+      - name: Update the free preview (updated projections)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          ANGLE_CODE: ${{ secrets.ANGLE_CODE }}
+        run: ./scripts/promo_shots.ps1 -Mode preview -OutDir preview-out
+
       - name: Commit updated history
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
           git add history.json schedule.json data/games.csv data/gamelogs data/market.json
+          if [ -f data/preview.json ]; then git add data/preview.json; fi
           if git diff --cached --quiet; then
             echo "No changes today."
           else
