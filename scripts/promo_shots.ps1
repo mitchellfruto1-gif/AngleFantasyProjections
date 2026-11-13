@@ -7,8 +7,9 @@
 # Weekly (Monday): saves the encrypted Monday snapshot
 # (data/monday/YYYY-MM-DD.json, committed by the workflow), then the Monday thread and images, plus the weekly top 25 and Market movers.
 # Snapshot: only saves the snapshot (run once to start the week-to-week diff). Nothing is posted anywhere.
+# Preview (run by the daily data job, weekly-ranks.yml): saves data/preview.json, the free preview's players with the UPDATED projections. No email.
 param(
-  [ValidateSet("daily", "night", "weekly", "snapshot", "board")][string]$Mode = "daily",
+  [ValidateSet("daily", "night", "weekly", "snapshot", "board", "preview")][string]$Mode = "daily",
   [string]$Only = "",     # board mode: comma list of real-rank cards (default: all of them); also works to pick one card, e.g. -Only rookies
   [string]$Night = "",     # night mode: the US Eastern game date
   [string]$Top10 = "",     # daily mode: add the top 10s for this game date (YYYY-MM-DD) because the night email didn't go out
@@ -25,7 +26,7 @@ $pt = $null; foreach ($tz in "America/Los_Angeles", "Pacific Standard Time") { i
 $midweek = @{ Wednesday = "monday-wed"; Thursday = "monday-thu" }[$pt.DayOfWeek.ToString()]
 if ($Mode -eq "night" -and $Night -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "Night mode needs -Night YYYY-MM-DD." }
 $boardAll = @("rookies", "movers-cat", "movers-pts", "leaders", "sched-week", "sched-playoffs", "injuries", "dynasty-movers", "sectors")
-$kinds = switch ($Mode) { "board" { if ($Only) { @($Only -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { $boardAll } } "weekly" { @("monday-snap", "monday", "week-cat", "week-pts", "week-mkt") } "snapshot" { @("monday-snap") } "night" { @("day-cat", "day-pts") } default { @($(if ($Top10) { @("day-cat", "day-pts") }) + @("mkt-picks") + @($midweek | Where-Object { $_ })) } }
+$kinds = switch ($Mode) { "board" { if ($Only) { @($Only -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { $boardAll } } "weekly" { @("monday-snap", "monday", "week-cat", "week-pts", "week-mkt") } "snapshot" { @("monday-snap") } "preview" { @("preview-data") } "night" { @("day-cat", "day-pts") } default { @($(if ($Top10) { @("day-cat", "day-pts") }) + @("mkt-picks") + @($midweek | Where-Object { $_ })) } }
 $extra = $(if ($env:MONDAY_SAFE -eq "true") { "&safe=1" } else { "" }) + $(if ($Mode -eq "night") { "&night=$Night" } else { "" })
 if (-not $Browser) { foreach ($c in "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "C:\Program Files\Google\Chrome\Application\chrome.exe", "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe") { if (Test-Path $c) { $Browser = $c; break } } }
 if (-not $Browser) { throw "No Chrome or Edge found." }
@@ -94,6 +95,12 @@ foreach ($k in $kinds) {
     [IO.File]::WriteAllText($idx, (@{ dates = $dates } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
     $r | Add-Member file "data/monday/$($r.last).json"; $results += $r; Write-Host "$($k): snapshot $($r.last) ($($r.players) players)"; continue
   }
+  # the free preview's updated players: saved into the checkout (the daily data job commits it)
+  if ($r.preview) {
+    $dir = "data"; New-Item -ItemType Directory -Force $dir | Out-Null
+    [IO.File]::WriteAllText((Join-Path (Resolve-Path $dir) "preview.json"), ($r.preview | ConvertTo-Json -Compress -Depth 6), (New-Object Text.UTF8Encoding $false))
+    $results += $r; Write-Host "$($k): data/preview.json, $(@($r.preview.players).Count) players, week $($r.preview.week) (through $($r.preview.through))"; continue
+  }
   # kinds that draw their own PNGs (Monday images, Market cards): read them one at a time
   if ($r.files) {
     $fl = @($r.files); for ($i = 0; $i -lt $fl.Count; $i++) {
@@ -137,7 +144,7 @@ foreach ($r in $results) {
 # a day with no new games (or a missed data update) sends nothing rather than repeating yesterday
 $last = if ($ok.Count) { $ok[0].last } else { "" }
 $fresh = $last -and ([datetime]::ParseExact($last, "yyyy-MM-dd", $null) -ge [datetime]::UtcNow.Date.AddDays(-2))
-$send = $ok.Count -gt 0 -and $Mode -ne "snapshot" -and ($Mode -eq "weekly" -or $Mode -eq "night" -or $fresh)   # board cards use the latest game day too, so $fresh guards them
+$send = $ok.Count -gt 0 -and $Mode -ne "snapshot" -and $Mode -ne "preview" -and ($Mode -eq "weekly" -or $Mode -eq "night" -or $fresh)   # board cards use the latest game day too, so $fresh guards them
 Write-Host "subject: $subject | images: $($ok.Count) | latest game day: $last | send: $send"
 if ($env:GITHUB_OUTPUT) { Add-Content $env:GITHUB_OUTPUT "subject=$subject"; Add-Content $env:GITHUB_OUTPUT "send=$($send.ToString().ToLower())" }
 if (-not $ok.Count) { exit 1 }
