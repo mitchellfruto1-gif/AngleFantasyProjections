@@ -13,5 +13,7 @@
     { "binding": "DB", "database_name": "angle-prefs", "database_id": "8bbd63b0-7262-4318-a238-83db493e5f8e" }
   ],
   "observability": { "enabled": true },
+  // every 15 minutes the Worker starts any GitHub job that's due (worker.js scheduled(); GitHub's own schedule ran hours late)
+  "triggers": { "crons": ["*/15 * * * *"] },
   "keep_vars": true
 }

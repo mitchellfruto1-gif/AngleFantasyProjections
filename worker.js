@@ -68,7 +68,7 @@ export default {
         case "/api/patreon/link/start": return await linkStart(env);
         case "/api/patreon/link/poll": return await linkPoll(url, env);
         case "/api/patreon/logout": return back(url, "/", [cookie(SESSION, "", 0)]);
-        case "/api/patreon/status": return status(env);
+        case "/api/patreon/status": return await status(env);
         case "/api/patreon/prefs": return await prefs(req, env);
       }
       return new Response("Not found", { status: 404 });
@@ -76,8 +76,40 @@ export default {
       console.log("patreon login error", e && e.stack || e);
       return back(url, "/?patreon=error");
     }
-  }
+  },
+  // every 15 minutes (wrangler.jsonc "triggers"): start any GitHub job that's due now
+  async scheduled(event, env, ctx) { ctx.waitUntil(runDueJobs(event.scheduledTime, env)); }
 };
+
+/* ---------- Starting the GitHub jobs on time (2026-11-17) ----------
+   From Nov 11 GitHub's own schedule started these jobs 6-10 hours late (the 3 AM Pacific stats update ran around noon).
+   Cloudflare's timer is on time, so at each job's time the Worker asks GitHub to run that workflow now: the same as
+   pressing "Run workflow", which starts right away. GitHub's own schedule stays in the workflow files as a backup; the
+   promo email workflows skip an automatic run when that email already went out (their "guard" job), so nothing is
+   sent twice. Needs the Worker secret GH_DISPATCH_TOKEN: a fine-grained GitHub token for this repo only, with
+   "Actions: Read and write". /api/patreon/status says whether it's set and works (never its value).
+   Times are UTC, the same as the workflows' own cron lines. */
+const GH_REPO = "mitchellfruto1-gif/AngleFantasyProjections";
+const hm = t => String(t.getUTCHours()).padStart(2, "0") + ":" + String(t.getUTCMinutes()).padStart(2, "0");
+const GH_JOBS = [
+  ["weekly-ranks.yml", t => hm(t) === "11:00"],                                        // daily stats update, 3 AM Pacific
+  ["promo-emails.yml", t => hm(t) === "13:30", { mode: "daily", auto: "true" }],         // daily promo email
+  ["promo-emails.yml", t => hm(t) === "13:45" && t.getUTCDay() === 1, { mode: "weekly", auto: "true" }],   // Monday update email
+  ["promo-ranks.yml", t => hm(t) === "14:15", { auto: "true" }],                         // real-rank promo cards
+  ["roster-watch.yml", t => hm(t) === "15:30" || hm(t) === "01:30"],                   // roster and injury watch
+  ["promo-night.yml", t => t.getUTCHours() >= 22 || t.getUTCHours() <= 8]];            // night top 10s: checks every 15 min, sends once
+const dueJobs = ms => { const t = new Date(Math.round(ms / 9e5) * 9e5); return GH_JOBS.filter(j => j[1](t)); };   // to the nearest quarter hour
+async function runDueJobs(ms, env) {
+  const due = dueJobs(ms); if (!due.length) return;
+  if (!env.GH_DISPATCH_TOKEN) return console.log("GH_DISPATCH_TOKEN isn't set, so these jobs were left to GitHub's schedule:", due.map(j => j[0]).join(", "));
+  for (const [wf, , inputs] of due) {
+    const body = { ref: "main" }; if (inputs) body.inputs = inputs;
+    try { const r = await fetch(`https://api.github.com/repos/${GH_REPO}/actions/workflows/${wf}/dispatches`, { method: "POST", headers: ghHeaders(env), body: JSON.stringify(body) });
+      console.log("started", wf, r.status === 204 ? "ok" : r.status + " " + (await r.text()).slice(0, 300)); }
+    catch (e) { console.log("couldn't start", wf, e && e.message); }
+  }
+}
+const ghHeaders = env => ({ Authorization: "Bearer " + env.GH_DISPATCH_TOKEN, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "angle-site-worker", "Content-Type": "application/json" });
 
 // always the real domain, even when the request was forwarded from the old Vercel host or came in on workers.dev
 const SITE = "https://anglefantasybbprojections.com";
@@ -253,9 +285,11 @@ async function yahooRoute(url, req, env) {
 }
 
 // setup check: says which settings the live site can see (never their values)
-function status(env) {
+async function status(env) {
+  // the GitHub token: set, and accepted by GitHub for this repo's workflows (a read-only check; nothing is started)
+  let gh = false; if (env.GH_DISPATCH_TOKEN) try { gh = (await fetch(`https://api.github.com/repos/${GH_REPO}/actions/workflows?per_page=1`, { headers: ghHeaders(env) })).status === 200; } catch (e) {}
   return json({ PATREON_CLIENT_SECRET: !!env.PATREON_CLIENT_SECRET, SESSION_SECRET: !!env.SESSION_SECRET, ACCESS_CODE: !!env.ACCESS_CODE, YAHOO_CLIENT_SECRET: !!env.YAHOO_CLIENT_SECRET,
-    ALLOWLIST_ids: String(env.ALLOWLIST || "").split(/[\s,]+/).filter(Boolean).length, DB: !!env.DB });
+    ALLOWLIST_ids: String(env.ALLOWLIST || "").split(/[\s,]+/).filter(Boolean).length, DB: !!env.DB, GH_DISPATCH_TOKEN: !!env.GH_DISPATCH_TOKEN, GH_DISPATCH_TOKEN_works: gh });
 }
 
 /* ---------- helpers ---------- */
