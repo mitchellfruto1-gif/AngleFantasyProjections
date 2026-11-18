@@ -1,4 +1,5 @@
 name: Promo ranks
+run-name: "Promo ranks: ${{ inputs.cards || 'today' }}"
 
 # Emails a ready-to-post "real rank" promo image (or two) every morning, with suggested post text. Every image carries the
 # website name in its footer. The cards use real season-to-date production from history.json (updated by the 11:00 UTC
@@ -24,16 +25,46 @@ on:
         description: "Cards to send (comma list). Empty = today's theme."
         type: string
         default: ""
+      auto:
+        description: "Started by the website's timer (skips if this email already went out today). Leave off."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read     # the guard job looks for an earlier run today
 
 concurrency:
   group: promo-ranks
   cancel-in-progress: false
 
 jobs:
+  # Started by GitHub's schedule or by the website's timer (Cloudflare, input auto)? Then skip when today's cards already
+  # went out in the last 14 hours: GitHub's schedule can run hours late, after the timer's run has sent them. Runs you
+  # start yourself (Run workflow) always send.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.dup.outputs.skip }}
+    steps:
+      - name: Did today's cards already go out?
+        id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTO: ${{ github.event_name == 'schedule' || inputs.auto == true }}
+          WF: promo-ranks.yml
+        run: |
+          if [ "$AUTO" != "true" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          me=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .display_title)
+          since=$(date -u -d '-14 hours' +%FT%TZ)
+          n=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$WF/runs" -f created=">=$since" -f per_page=50 \
+            --jq "[.workflow_runs[] | select(.run_number < $GITHUB_RUN_NUMBER and .display_title == \"$me\" and (.conclusion == \"success\" or .status == \"in_progress\"))] | length")
+          echo "Earlier runs in the last 14 hours titled '$me': $n"
+          if [ "${n:-0}" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
   ranks:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
