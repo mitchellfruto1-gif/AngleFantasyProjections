@@ -42,6 +42,7 @@ for ($d = $fetchFrom; $d -le $last; $d = $d.AddDays(1)) {
   catch { Write-Warning "scoreboard $ds failed: $($_.Exception.Message)"; $failures += "scoreboard $ds"; continue }
   foreach ($ev in @($sb.events)) {
     if (-not $ev.status.type.completed -or $haveGame.ContainsKey([string]$ev.id)) { continue }
+    if ((@($ev.competitions[0].notes) | ForEach-Object { $_.headline }) -match 'Cup Championship') { continue }   # NBA Cup final: not a counting game
     try { $g = Invoke-RestMethod -Headers $headers -Uri "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=$($ev.id)" -TimeoutSec 60 }
     catch { Write-Warning "game $($ev.id) failed: $($_.Exception.Message)"; $failures += "game $($ev.id) on $ds"; continue }
     # final score and home/away for each side (for the Games Log)
@@ -192,6 +193,7 @@ try {
     foreach ($ev in @($ts.events)) {
       if ($sched.ContainsKey([string]$ev.id)) { continue }
       $c = $ev.competitions[0]
+      if ((@($c.notes) | ForEach-Object { $_.headline }) -match 'Cup Championship') { continue }   # the NBA Cup final doesn't count for stats (ESPN lists it as a regular-season game)
       $hm = ($c.competitors | Where-Object { $_.homeAway -eq 'home' }).team.abbreviation; $aw = ($c.competitors | Where-Object { $_.homeAway -eq 'away' }).team.abbreviation
       if (-not $hm -or -not $aw) { continue }
       $utc = [datetime]::Parse($ev.date, $inv, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)
